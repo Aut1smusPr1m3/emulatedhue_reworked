@@ -87,18 +87,18 @@ class EntityState(BaseModel):
             data[const.HASS_ATTR_TRANSITION] = self.transition_seconds
         return data
 
-    @classmethod
+@classmethod
     def from_config(cls, states: dict | None):
         """Convert from config."""
-        # Initialize states if first time running
         if not states:
             return EntityState()
 
         save_state = {}
-        for state in list(vars(cls).get("__fields__")):
-            if state in save_state:
-                save_state[state] = states[state]
+        # Use model_fields for v2 compatibility
+        for field_name in cls.model_fields.keys():
+            if field_name in states:
+                save_state[field_name] = states[field_name]
         return EntityState(**save_state)
 
 
-ALL_STATES: list = list(vars(EntityState).get("__fields__"))
+ALL_STATES: list = list(EntityState.model_fields.keys())
