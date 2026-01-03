@@ -128,7 +128,7 @@ jobs:
               url: ghcr.io/aut1smuspr1m3,
               username: GCHR_USERNAME,
               password: GHCR_PAT,
-              repo: ghcr.io/https://github.com/aut1smuspr1m3/emulatedhue_reworked,
+              repo: ghcr.io/aut1smuspr1m3/emulatedhue_reworked,
             }
     steps:
       - name: Checkout
@@ -179,7 +179,7 @@ jobs:
                url: ghcr.io/aut1smuspr1m3,
               username: GCHR_USERNAME,
               password: GHCR_PAT,
-              repo: ghcr.io/https://github.com/aut1smuspr1m3/emulatedhue_reworked,
+              repo: ghcr.io/aut1smuspr1m3/emulatedhue_reworked,
             }
     steps:
       - name: Checkout
