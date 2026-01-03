@@ -24,6 +24,7 @@ from emulated_hue.utils import (
     send_success_response,
     update_dict,
     wrap_number,
+    matches_label_filter,
 )
 
 if TYPE_CHECKING:
@@ -166,6 +167,18 @@ class HueApiV1Endpoints:
 
         # enable all disabled lights and groups
         for entity_id in self.ctl.controller_hass.get_entities():
+            # pre-filter based on label_filter
+            hass_state = self.ctl.controller_hass.get_entity_state(entity_id)
+            device_id = self.ctl.controller_hass.get_device_id_from_entity_id(entity_id)
+            device_attrs = (
+                self.ctl.controller_hass.get_device_attributes(device_id)
+                if device_id
+                else {}
+            )
+            if not matches_label_filter(self.ctl.config_instance.label_filter, device_attrs, hass_state):
+                LOGGER.debug("Skipping entity %s - does not match label_filter=%s", entity_id, self.ctl.config_instance.label_filter)
+                continue
+
             light_id = await self.ctl.config_instance.async_entity_id_to_light_id(
                 entity_id
             )
@@ -200,6 +213,16 @@ class HueApiV1Endpoints:
         entity_id = await self.ctl.config_instance.async_entity_id_from_light_id(
             light_id
         )
+        # Enforce label filter: do not expose lights that don't match
+        hass_state = self.ctl.controller_hass.get_entity_state(entity_id)
+        device_id = self.ctl.controller_hass.get_device_id_from_entity_id(entity_id)
+        device_attrs = (
+            self.ctl.controller_hass.get_device_attributes(device_id) if device_id else {}
+        )
+        if not matches_label_filter(self.ctl.config_instance.label_filter, device_attrs, hass_state):
+            LOGGER.debug("Light %s hidden by label_filter", entity_id)
+            return send_error_response(request.path, "resource, {path}, not available", 3)
+
         result = await self.__async_entity_to_hue(entity_id)
         return send_json_response(result)
 
@@ -212,6 +235,16 @@ class HueApiV1Endpoints:
         entity_id = await self.ctl.config_instance.async_entity_id_from_light_id(
             light_id
         )
+        # Enforce label filter on control operations
+        hass_state = self.ctl.controller_hass.get_entity_state(entity_id)
+        device_id = self.ctl.controller_hass.get_device_id_from_entity_id(entity_id)
+        device_attrs = (
+            self.ctl.controller_hass.get_device_attributes(device_id) if device_id else {}
+        )
+        if not matches_label_filter(self.ctl.config_instance.label_filter, device_attrs, hass_state):
+            LOGGER.debug("Control blocked for %s by label_filter", entity_id)
+            return send_error_response(request.path, "resource, {path}, not available", 3)
+
         await self.__async_light_action(entity_id, request_data)
         # Create success responses for all received keys
         return send_success_response(request.path, request_data, username)
@@ -352,6 +385,15 @@ class HueApiV1Endpoints:
         if "name" in request_data:
             light_conf = await self.ctl.config_instance.async_get_light_config(light_id)
             entity_id = light_conf["entity_id"]
+            # Enforce label filter for updates
+            hass_state = self.ctl.controller_hass.get_entity_state(entity_id)
+            device_id = self.ctl.controller_hass.get_device_id_from_entity_id(entity_id)
+            device_attrs = (
+                self.ctl.controller_hass.get_device_attributes(device_id) if device_id else {}
+            )
+            if not matches_label_filter(self.ctl.config_instance.label_filter, device_attrs, hass_state):
+                LOGGER.debug("Update blocked for %s by label_filter", entity_id)
+                return send_error_response(request.path, "resource, {path}, not available", 3)
             device = await async_get_device(self.ctl, entity_id)
             device.name = request_data["name"]
         return send_success_response(request.path, request_data, username)
@@ -781,6 +823,17 @@ class HueApiV1Endpoints:
         """Create a dict of all lights."""
         result = {}
         for entity_id in self.ctl.controller_hass.get_entities():
+            # quick pre-filter: check if entity matches label filter before creating device
+            hass_state = self.ctl.controller_hass.get_entity_state(entity_id)
+            device_id = self.ctl.controller_hass.get_device_id_from_entity_id(entity_id)
+            device_attrs = (
+                self.ctl.controller_hass.get_device_attributes(device_id)
+                if device_id
+                else {}
+            )
+            if not matches_label_filter(self.ctl.config_instance.label_filter, device_attrs, hass_state):
+                continue
+
             device = await async_get_device(self.ctl, entity_id)
             if not device.enabled:
                 continue
@@ -825,7 +878,34 @@ class HueApiV1Endpoints:
                         group_conf["stream"]["active"] = True
                     else:
                         group_conf["stream"]["active"] = False
-                result[group_id] = group_conf
+                # Filter local group members by label_filter
+                filtered_group = copy.deepcopy(group_conf)
+                if "lights" in filtered_group and isinstance(filtered_group["lights"], list):
+                    new_lights = []
+                    for light_id in filtered_group["lights"]:
+                        try:
+                            entity_id = await self.ctl.config_instance.async_entity_id_from_light_id(
+                                light_id
+                            )
+                        except Exception:
+                            # invalid mapping, skip
+                            continue
+                        hass_state = self.ctl.controller_hass.get_entity_state(entity_id)
+                        device_id = self.ctl.controller_hass.get_device_id_from_entity_id(entity_id)
+                        device_attrs = (
+                            self.ctl.controller_hass.get_device_attributes(device_id)
+                            if device_id
+                            else {}
+                        )
+                        if matches_label_filter(self.ctl.config_instance.label_filter, device_attrs, hass_state):
+                            new_lights.append(light_id)
+                        else:
+                            LOGGER.debug("Excluding light %s from local group %s by label_filter", entity_id, group_id)
+                    filtered_group["lights"] = new_lights
+                # do not return empty local groups
+                if not filtered_group.get("lights"):
+                    continue
+                result[group_id] = filtered_group
 
         # Hass areas/rooms
         areas = await self.ctl.controller_hass.async_get_area_entities()
@@ -890,6 +970,16 @@ class HueApiV1Endpoints:
                 "entities"
             ]
             for entity_id in area_entities:
+                # Apply label_filter to area entities
+                hass_state = self.ctl.controller_hass.get_entity_state(entity_id)
+                device_id = self.ctl.controller_hass.get_device_id_from_entity_id(entity_id)
+                device_attrs = (
+                    self.ctl.controller_hass.get_device_attributes(device_id)
+                    if device_id
+                    else {}
+                )
+                if not matches_label_filter(self.ctl.config_instance.label_filter, device_attrs, hass_state):
+                    continue
                 yield entity_id
 
         # Local group
@@ -900,6 +990,16 @@ class HueApiV1Endpoints:
                         light_id
                     )
                 )
+                # Apply label filter for local group members as well
+                hass_state = self.ctl.controller_hass.get_entity_state(entity_id)
+                device_id = self.ctl.controller_hass.get_device_id_from_entity_id(entity_id)
+                device_attrs = (
+                    self.ctl.controller_hass.get_device_attributes(device_id)
+                    if device_id
+                    else {}
+                )
+                if not matches_label_filter(self.ctl.config_instance.label_filter, device_attrs, hass_state):
+                    continue
                 yield entity_id
 
     async def __async_whitelist_to_bridge_config(self) -> dict:

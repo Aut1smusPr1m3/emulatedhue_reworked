@@ -1,0 +1,26 @@
+{
+  "name": "Emulated HUE",
+  "version": "0.3.0",
+  "description": "Hue Emulation for Home Assistant (custom build)",
+  "url": "https://github.com/Aut1smusPr1m3/emulated_hue-Reworked",
+  "slug": "emulated_hue",
+  "stage": "stable",
+  "startup": "application",
+  "boot": "auto",
+  "arch": ["armhf", "armv7", "aarch64", "amd64", "i386"],
+  "map": ["config:rw"],
+  "host_network": true,
+  "environment": {},
+  "homeassistant_api": true,
+  "init": false,
+  "options": {
+    "verbose": false
+  },
+  "schema": {
+    "http_port": "int?",
+    "https_port": "int?",
+    "use_default_ports_for_discovery": "bool?",
+    "verbose": "bool"
+  },
+  "image": "ghcr.io/Aut1smusPr1m3/emulated_hue-reworked:latest"
+}

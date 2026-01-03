@@ -74,6 +74,65 @@ def slugify(text: str) -> str:
     return unicode_slug.slugify(text, separator="_")  # type: ignore
 
 
+def parse_label_filter(filter_string: str) -> list[str]:
+    """Parse a comma-separated label-filter string into normalized tokens.
+
+    - Splits on comma, trims whitespace and lowercases tokens.
+    - Returns empty list if input is empty or no valid tokens found.
+    """
+    if not filter_string:
+        return []
+    parts = [p.strip().lower() for p in filter_string.split(",")]
+    return [p for p in parts if p]
+
+
+def matches_label_filter(label_filter: list[str], device_props, hass_state_dict: dict) -> bool:
+    """Return True if device matches any of the label_filter tokens.
+
+    device_props can be an object with attributes (`manufacturer`, `model`, `name`, `unique_id`)
+    or a dict with these keys. `hass_state_dict` is expected to be the result of
+    `controller_hass.get_entity_state(entity_id)` and may contain `attributes` with
+    `friendly_name`.
+
+    Matching is case-insensitive substring match. An empty `label_filter` means
+    "allow all" (returns True).
+    """
+    if not label_filter:
+        return True
+
+    candidates: list[str] = []
+    # device_props may be dataclass/object or dict
+    def _get(attr: str):
+        if not device_props:
+            return None
+        if isinstance(device_props, dict):
+            return device_props.get(attr)
+        return getattr(device_props, attr, None)
+
+    for key in ("manufacturer", "model", "name", "unique_id"):
+        val = _get(key)
+        if val:
+            candidates.append(str(val).lower())
+
+    # friendly name from hass state
+    try:
+        friendly = hass_state_dict.get("attributes", {}).get("friendly_name")
+    except Exception:
+        friendly = None
+    if friendly:
+        candidates.append(str(friendly).lower())
+
+    # if no candidate fields present, do not match
+    if not candidates:
+        return False
+
+    for token in label_filter:
+        for cand in candidates:
+            if token in cand:
+                return True
+    return False
+
+
 def update_dict(dict1, dict2):
     """Helpermethod to update dict1 with values of dict2."""
     for key, value in dict2.items():
