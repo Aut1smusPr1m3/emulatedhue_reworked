@@ -16,12 +16,6 @@ jobs:
             hass_arch: i386
           - arch: linux/amd64
             hass_arch: amd64
-          - arch: linux/arm/v6
-            hass_arch: armv6
-          - arch: linux/arm/v7
-            hass_arch: armv7
-          - arch: linux/arm64
-            hass_arch: aarch64
 
     steps:
       - name: Checkout
