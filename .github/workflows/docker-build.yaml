@@ -122,13 +122,13 @@ jobs:
     if: ${{ !startsWith(github.ref, 'refs/pull/') && !startsWith(github.ref, 'refs/heads/dependabot/') }}
     strategy:
       matrix:
-        arch: [i386, amd64, armv6, armv7, aarch64]
+        arch: [i386, amd64]
         registry:
           - {
-              url: ghcr.io/hass-emulated-hue,
+              url: ghcr.io/aut1smuspr1m3,
               username: GCHR_USERNAME,
               password: GHCR_PAT,
-              repo: ghcr.io/hass-emulated-hue/core,
+              repo: ghcr.io/https://github.com/aut1smuspr1m3/emulatedhue_reworked,
             }
     steps:
       - name: Checkout
@@ -180,10 +180,10 @@ jobs:
       matrix:
         registry:
           - {
-              url: ghcr.io/hass-emulated-hue,
+               url: ghcr.io/aut1smuspr1m3,
               username: GCHR_USERNAME,
               password: GHCR_PAT,
-              repo: ghcr.io/hass-emulated-hue/core,
+              repo: ghcr.io/https://github.com/aut1smuspr1m3/emulatedhue_reworked,
             }
     steps:
       - name: Checkout
