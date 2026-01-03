@@ -9,12 +9,13 @@ from typing import Any
 
 from getmac import get_mac_address
 
-from emulated_hue.const import CONFIG_WRITE_DELAY_SECONDS, DEFAULT_THROTTLE_MS
+from emulated_hue.const import CONFIG_WRITE_DELAY_SECONDS, DEFAULT_THROTTLE_MS, LABEL_FILTER_ENV_VAR
 from emulated_hue.utils import (
     async_save_json,
     create_secure_string,
     get_local_ip,
     load_json,
+    parse_label_filter,
 )
 
 from .devices import force_update_all
@@ -87,6 +88,23 @@ class Config:
         self._saver_task: asyncio.Task | None = None
 
         self._entertainment_api: EntertainmentAPI | None = None
+        # Parse label filter from environment (comma separated) or fallback to stored config
+        try:
+            env_filter = os.getenv(LABEL_FILTER_ENV_VAR, "")
+        except Exception:
+            env_filter = ""
+        # parse env var into list of labels (lowercased, trimmed)
+        self._label_filter: list[str] = parse_label_filter(env_filter)
+        # allow persisted override from bridge_config if present
+        persisted = self.get_storage_value("bridge_config", "label_filter", None)
+        if persisted and isinstance(persisted, list):
+            # normalize persisted values
+            self._label_filter = [str(x).strip().lower() for x in persisted if x]
+
+    @property
+    def label_filter(self) -> list[str]:
+        """Return configured label filter as list of lowercase tokens."""
+        return self._label_filter
 
     async def create_save_task(self) -> None:
         """Create a task to save the config."""
