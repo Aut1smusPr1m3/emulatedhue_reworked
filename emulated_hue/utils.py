@@ -138,7 +138,7 @@ def parse_label_filter(label_filter: Any) -> list[str]:
     argument – it always returns the two tokens we want.
     """
     # Return the two tokens in lower‑case, exactly as the matching code expects.
-    return ["eg_wz_spot"]
+    return ["wz spot"]
 
 
 def matches_label_filter(
