@@ -443,8 +443,24 @@ class RGBDevice(BrightnessDevice):
         """Control RGB."""
 
         def set_hue_sat(self, hue: int | float, sat: int | float) -> None:
-            """Set hue and saturation colors."""
-            self._control_state.hue_saturation = (int(hue), int(sat))
+            """
+            Set hue and saturation colors.
+
+            The Hue client sends values in the *Hue* range
+            (hue 0‑65535, sat 0‑254). Home Assistant expects
+            hue in degrees (0‑360) and saturation as a percent
+            (0‑100). We therefore convert *down* before storing the
+            command in the control state.
+            """
+            # Down‑scale to Home‑Assistant ranges
+            hue_ha = int(round(hue * 360 / 65535))
+            sat_ha = int(round(sat * 100 / 254))
+
+            # Clamp just in case
+            hue_ha = max(0, min(hue_ha, 360))
+            sat_ha = max(0, min(sat_ha, 100))
+
+            self._control_state.hue_saturation = (hue_ha, sat_ha)
             self._control_state.color_mode = const.HASS_COLOR_MODE_HS
 
         def set_xy(self, x: float, y: float) -> None:
