@@ -122,6 +122,26 @@ def _normalise_filter(label_filter: Any) -> list[str]:
     return uniq
 
 
+# ----------------------------------------------------------------------
+# Public API – legacy name used by ``controllers.config``.
+# ----------------------------------------------------------------------
+def parse_label_filter(label_filter: Any) -> list[str]:
+    """
+    Return a normalised list of label‑filter tokens.
+
+    ``controllers.config`` historically imported a function called
+    ``parse_label_filter``.  The implementation was renamed to the more
+    internal ``_normalise_filter`` during a previous refactor, but the
+    import statement was never updated, resulting in the ImportError you
+    are seeing now.
+
+    This thin wrapper simply forwards to ``_normalise_filter`` so that
+    existing code (and any third‑party plugins) continue to work without
+    modification.
+    """
+    return _normalise_filter(label_filter)
+
+
 def matches_label_filter(
     label_filter: Any,
     device_props,
