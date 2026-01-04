@@ -40,6 +40,7 @@ class Config:
         http_port: int,
         https_port: int,
         use_default_ports: bool,
+        label_filter_exact: str | None = None,
     ):
         """Initialize the instance."""
         self.ctl = ctl

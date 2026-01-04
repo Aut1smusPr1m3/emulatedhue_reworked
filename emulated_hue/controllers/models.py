@@ -3,7 +3,11 @@ import asyncio
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
-from pydantic import BaseModel
+# ------------------------------------------------------------
+# NOTE: we now import ``field_validator`` so we can coerce
+# hue/saturation values that Home Assistant returns as floats.
+# ------------------------------------------------------------
+from pydantic import BaseModel, field_validator
 
 from emulated_hue import const
 
@@ -34,12 +38,41 @@ class EntityState(BaseModel):
     transition_seconds: float | None = None
     brightness: int | None = None
     color_temp: int | None = None
-    hue_saturation: tuple[int, int] | None = None
+
+    # --------------------------------------------------------
+    # Hue‑saturation may come from HA as floats (e.g. 27.152)
+    # The Hue API expects integers, so we accept floats here and
+    # coerce them to ints with a validator (see below).
+    # --------------------------------------------------------
+    hue_saturation: tuple[int | float, int | float] | None = None
+
     xy_color: tuple[float, float] | None = None
     rgb_color: tuple[int, int, int] | None = None
     flash_state: str | None = None
     effect: str | None = None
     color_mode: str | None = None
+
+    # -----------------------------------------------------------------
+    # NEW: validator that guarantees integer hue & saturation
+    # -----------------------------------------------------------------
+    @field_validator("hue_saturation")
+    @classmethod
+    def _coerce_hue_sat(
+        cls, v: tuple[int | float, int | float] | None
+    ) -> tuple[int, int] | None:
+        """
+        Home‑Assistant often reports hue/saturation as floats.
+        The Hue API expects integer values (0‑65535 for hue,
+        0‑254 for saturation).  We round them to the nearest int
+        so the rest of the code can keep using integer semantics.
+        """
+        if v is None:
+            return v
+        hue, sat = v
+        # ``round`` gives the most natural behaviour for .5 values.
+        return (int(round(hue)), int(round(sat)))
+
+    # -----------------------------------------------------------------
 
     def __eq__(self, other):
         """Compare states."""

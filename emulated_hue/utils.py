@@ -5,9 +5,11 @@ import json
 import logging
 import os
 import random
+import re
 import socket
 import string
 from ipaddress import IPv4Address, IPv6Address, ip_address, ip_network
+from typing import Any, Mapping, Sequence
 
 import slugify as unicode_slug
 from aiohttp import web
@@ -74,62 +76,123 @@ def slugify(text: str) -> str:
     return unicode_slug.slugify(text, separator="_")  # type: ignore
 
 
-def parse_label_filter(filter_string: str) -> list[str]:
-    """Parse a comma-separated label-filter string into normalized tokens.
-
-    - Splits on comma, trims whitespace and lowercases tokens.
-    - Returns empty list if input is empty or no valid tokens found.
+# ----------------------------------------------------------------------
+#  Label‑filter helper – whitelist implementation
+# ----------------------------------------------------------------------
+def _normalise_filter(label_filter: Any) -> list[str]:
     """
-    if not filter_string:
-        return []
-    parts = [p.strip().lower() for p in filter_string.split(",")]
-    return [p for p in parts if p]
+    Normalise the ``label_filter`` configuration value.
 
+    Accepted forms:
+      * ``None`` or ``""`` → empty list (no filtering)
+      * a plain string – ``"eg_wz, kitchen"``
+      * a list/tuple of strings – ``["eg_wz", "kitchen"]``
 
-def matches_label_filter(label_filter: list[str], device_props, hass_state_dict: dict) -> bool:
-    """Return True if device matches any of the label_filter tokens.
-
-    device_props can be an object with attributes (`manufacturer`, `model`, `name`, `unique_id`)
-    or a dict with these keys. `hass_state_dict` is expected to be the result of
-    `controller_hass.get_entity_state(entity_id)` and may contain `attributes` with
-    `friendly_name`.
-
-    Matching is case-insensitive substring match. An empty `label_filter` means
-    "allow all" (returns True).
+    The function:
+      * splits on commas, semicolons or any whitespace,
+      * lower‑cases everything,
+      * removes empty entries and duplicates while preserving order.
     """
     if not label_filter:
+        return []
+
+    # If the user gave a list/tuple we keep the items, otherwise treat it as a
+    # single string and split it later.
+    if isinstance(label_filter, (list, tuple)):
+        raw_items: Sequence[str] = [str(i) for i in label_filter]
+    else:
+        raw_items = [str(label_filter)]
+
+    tokens: list[str] = []
+    for item in raw_items:
+        item = item.strip()
+        if not item:
+            continue
+        # Split on commas, semicolons or any whitespace
+        parts = re.split(r"[,\s;]+", item)
+        tokens.extend(p.lower() for p in parts if p)
+
+    # Deduplicate while preserving order
+    seen = set()
+    uniq: list[str] = []
+    for t in tokens:
+        if t not in seen:
+            seen.add(t)
+            uniq.append(t)
+    return uniq
+
+
+def matches_label_filter(
+    label_filter: Any,
+    device_props,
+    hass_state_dict: Mapping[str, Any],
+) -> bool:
+    """
+    Return ``True`` if the entity should be **exposed** to the Hue bridge.
+
+    Whitelist semantics:
+      * If ``label_filter`` is empty → *all* entities pass.
+      * Otherwise the entity passes **only** when **any** token from the filter
+        appears (case‑insensitive substring) in **one** of:
+          • device label (`device_props.label` or `device_props["label"]`)
+          • device manufacturer / model / name / unique_id
+          • entity friendly name (`hass_state_dict["attributes"]["friendly_name"]`)
+
+    Parameters
+    ----------
+    label_filter:
+        Whatever the user configured under ``label_filter`` in *config.yaml*.
+        The function internally normalises it via :func:`_normalise_filter`.
+    device_props:
+        Either a dict or an object that holds the device attributes
+        (manufacturer, model, name, unique_id, label …).
+    hass_state_dict:
+        The full state dict returned by
+        ``controller_hass.get_entity_state(entity_id)``.
+    """
+    # 1️⃣  Normalise the filter → list of lower‑case tokens
+    tokens = _normalise_filter(label_filter)
+
+    # 2️⃣  Empty filter → expose everything
+    if not tokens:
         return True
 
+    # 3️⃣  Gather candidate strings we will search in
     candidates: list[str] = []
-    # device_props may be dataclass/object or dict
-    def _get(attr: str):
-        if not device_props:
+
+    # Helper to fetch an attribute from either a dict or an object
+    def _get(attr: str) -> Any | None:
+        if device_props is None:
             return None
-        if isinstance(device_props, dict):
+        if isinstance(device_props, Mapping):
             return device_props.get(attr)
         return getattr(device_props, attr, None)
 
-    for key in ("manufacturer", "model", "name", "unique_id"):
+    # Device‑level fields (manufacturer, model, name, unique_id, label)
+    for key in ("manufacturer", "model", "name", "unique_id", "label"):
         val = _get(key)
         if val:
             candidates.append(str(val).lower())
 
-    # friendly name from hass state
+    # Friendly name from the HA state
     try:
         friendly = hass_state_dict.get("attributes", {}).get("friendly_name")
-    except Exception:
-        friendly = None
-    if friendly:
-        candidates.append(str(friendly).lower())
+        if friendly:
+            candidates.append(str(friendly).lower())
+    except Exception:  # pragma: no cover – defensive
+        pass
 
-    # if no candidate fields present, do not match
+    # If we have nothing to match against → reject (nothing can satisfy the filter)
     if not candidates:
         return False
 
-    for token in label_filter:
+    # 4️⃣  Whitelist check – at least one token must be a substring of any candidate
+    for token in tokens:
         for cand in candidates:
             if token in cand:
                 return True
+
+    # No token matched → hide the entity
     return False
 
 

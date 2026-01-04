@@ -20,7 +20,8 @@
     "http_port": "int?",
     "https_port": "int?",
     "use_default_ports_for_discovery": "bool?",
-    "verbose": "bool"
+    "verbose": "bool",
+    "label_filter_exact": "str?"
   },
   "image": "ghcr.io/Aut1smusPr1m3/emulated_hue-reworked:latest"
 }
