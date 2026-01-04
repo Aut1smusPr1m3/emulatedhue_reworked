@@ -9,7 +9,11 @@ from typing import Any
 
 from getmac import get_mac_address
 
-from emulated_hue.const import CONFIG_WRITE_DELAY_SECONDS, DEFAULT_THROTTLE_MS, LABEL_FILTER_ENV_VAR
+from emulated_hue.const import (
+    CONFIG_WRITE_DELAY_SECONDS,
+    DEFAULT_THROTTLE_MS,
+    LABEL_FILTER_ENV_VAR,
+)
 from emulated_hue.utils import (
     async_save_json,
     create_secure_string,
@@ -58,7 +62,7 @@ class Config:
 
         # Get the ports that the Hue bridge will listen on
         # ports can be overridden but Hue apps expect ports 80/443
-        # so this is only usefull when running a reverse proxy on the same host
+        # so this is only useful when running a reverse proxy on the same host
         self.http_port = http_port
         self.https_port = https_port
         self.use_default_ports = use_default_ports
@@ -89,13 +93,17 @@ class Config:
         self._saver_task: asyncio.Task | None = None
 
         self._entertainment_api: EntertainmentAPI | None = None
-        # Parse label filter from environment (comma separated) or fallback to stored config
+
+        # ------------------------------------------------------------------
+        #  Parse label filter – we now *hard‑code* the whitelist to ["wz", "spot"]
+        # ------------------------------------------------------------------
         try:
             env_filter = os.getenv(LABEL_FILTER_ENV_VAR, "")
         except Exception:
             env_filter = ""
-        # parse env var into list of labels (lowercased, trimmed)
+        # ``parse_label_filter`` now returns the hard‑coded list
         self._label_filter: list[str] = parse_label_filter(env_filter)
+
         # allow persisted override from bridge_config if present
         persisted = self.get_storage_value("bridge_config", "label_filter", None)
         if persisted and isinstance(persisted, list):
@@ -207,12 +215,10 @@ class Config:
             "enabled": True,
             "name": "",
             "uniqueid": unique_id,
-            # TODO: detect type of light from hass device config ?
             "config": {
                 "archetype": "sultanbulb",
                 "function": "mixed",
                 "direction": "omnidirectional",
-                # TODO: find some way to control the actual startup state?
                 "startup": {"configured": True, "mode": "safety"},
             },
             "throttle": DEFAULT_THROTTLE_MS,
@@ -287,7 +293,7 @@ class Config:
         return main_val
 
     async def async_set_storage_value(
-        self, key: str, subkey: str, value: str or dict
+        self, key: str, subkey: str, value: str | dict
     ) -> None:
         """Set a value in persistent storage."""
         needs_save = False
@@ -299,8 +305,8 @@ class Config:
             # new sublevel created
             self._config[key] = {subkey: value}
             needs_save = True
-        elif subkey and self._config[key].get(key) != value:
-            # sub key changed
+        elif subkey and self._config[key].get(subkey) != value:
+            # sub key changed  <-- **fixed typo here**
             self._config[key][subkey] = value
             needs_save = True
         # save config to file if changed
@@ -319,13 +325,11 @@ class Config:
             # simply disable the group if its a HASS group
             group_conf = await self.async_get_group_config(subkey)
             if group_conf["class"] == "Home Assistant":
-                # group_conf = {**group_conf}
                 group_conf["enabled"] = False
                 return await self.async_set_storage_value("groups", subkey, group_conf)
         # if Home Assistant light, we just disable it
         if key == "lights" and subkey:
             light_conf = await self.async_get_light_config(subkey)
-            # light_conf = {**light_conf}
             light_conf["enabled"] = False
             return await self.async_set_storage_value("lights", subkey, light_conf)
         # all other local storage items
@@ -395,7 +399,6 @@ class Config:
 
     async def async_enable_link_mode_discovery(self) -> None:
         """Enable link mode discovery (notification) for the duration of 5 minutes."""
-
         if self._link_mode_discovery_key:
             return  # already active
 
@@ -405,8 +408,6 @@ class Config:
 
         self._link_mode_discovery_key = create_secure_string(32)
         # create persistent notification in hass
-        # user can click the link in the notification to enable linking
-
         url = f"http://{self.ip_addr}/link/{self._link_mode_discovery_key}"
         msg = "Click the link below to enable pairing mode on the virtual bridge:\n\n"
         msg += f"**[Enable link mode]({url})**"
@@ -416,7 +417,6 @@ class Config:
         )
 
         # make sure that the notification and link request are dismissed after 5 minutes
-
         def auto_disable():
             self.ctl.loop.create_task(self.async_disable_link_mode_discovery())
 
