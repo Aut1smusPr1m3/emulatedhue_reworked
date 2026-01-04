@@ -230,8 +230,8 @@ class Config:
                 if lights:
                     dummy_id = min(lights, key=int)   # e.g. "1"
                 else:
-                    # This should never happen because the prune step always
-                    # creates at least one light, but fallback to "1" just in case.
+                    # Should never happen because the prune step always creates
+                    # at least one light, but fallback to "1" just in case.
                     dummy_id = "1"
                 LOGGER.debug(
                     "Entity %s does not match label filter %s – using dummy light id %s",
@@ -389,27 +389,26 @@ class Config:
 
             new_groups[gid] = grp
 
-        # ---------- 5️⃣  If we have no groups at all, add a dummy room ----------
-        if not new_groups:
-            LOGGER.info(
-                "No groups survived pruning – creating a minimal dummy room."
-            )
-            dummy_group = {
-                "area_id": "dummy_room",
-                "class": "Other",
-                "enabled": True,
-                "name": "Dummy Room",
-                "type": "Room",
-                "lights": list(kept_ids),   # put *all* lights in the dummy room
-                "sensors": [],
-                "action": {"on": False},
-                "state": {"any_on": False, "all_on": False},
-            }
-            new_groups["1"] = dummy_group
+        # ---------- 5️⃣  Ensure a catch‑all room contains ALL lights ----------
+        # We always create/overwrite group "1" as a dummy room that lists every
+        # light that survived pruning.  This guarantees the Hue app can see
+        # every ambi light, even if the original groups were empty.
+        dummy_room = {
+            "area_id": "dummy_room",
+            "class": "Other",
+            "enabled": True,
+            "name": "Dummy Room",
+            "type": "Room",
+            "lights": list(kept_ids),   # every kept light
+            "sensors": [],
+            "action": {"on": False},
+            "state": {"any_on": False, "all_on": False},
+        }
+        new_groups["1"] = dummy_room
 
         self._config["groups"] = new_groups
         LOGGER.info(
-            "Pruned groups: %d → %d (removed empty non‑entertainment groups)",
+            "Pruned groups: %d → %d (dummy room now contains all lights)",
             len(old_groups),
             len(new_groups),
         )
