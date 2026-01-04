@@ -99,7 +99,7 @@ class EntityState(BaseModel):
         # Falls du komplett auf V2 migrierst, wäre 'cls.model_fields' korrekter.
         # Ich habe die Logik hier konservativ behalten, aber den Bug in der if-Condition gefixt.
         fields = vars(cls).get("__fields__") or cls.model_fields
-        
+
         for state in list(fields):
             if state in states:
                 save_state[state] = states[state]
