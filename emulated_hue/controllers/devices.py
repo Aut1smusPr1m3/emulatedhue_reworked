@@ -456,15 +456,15 @@ class RGBDevice(BrightnessDevice):
             # Down‑scale from Hue range → Home‑Assistant range
             # -----------------------------------------------------------------
             # Hue → degrees (0‑359). 65535 should map to 359, not 360.
-            hue_ha = int(round((hue * 359) / 65535))
+            #hue_ha = int(round((hue * 359) / 65535))
             # Saturation → percent (0‑100)
-            sat_ha = int(round((sat * 100) / 254))
+            #sat_ha = int(round((sat * 100) / 254))
 
             # -----------------------------------------------------------------
             # Defensive clamping – never exceed HA limits
             # -----------------------------------------------------------------
-            hue_ha = max(0, min(hue_ha, 359))
-            sat_ha = max(0, min(sat_ha, 100))
+            hue_ha = max(0, min(hue, 360))
+            sat_ha = max(0, min(sat, 100))
 
             self._control_state.hue_saturation = (hue_ha, sat_ha)
             self._control_state.color_mode = const.HASS_COLOR_MODE_HS
