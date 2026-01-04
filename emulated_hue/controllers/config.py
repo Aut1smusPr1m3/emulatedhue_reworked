@@ -2,6 +2,7 @@
 import asyncio
 import datetime
 import hashlib
+import json                     # <-- NEW: needed for the sync write
 import logging
 import os
 from pathlib import Path
@@ -34,10 +35,10 @@ DEFINITIONS_FILE = os.path.join(
 )
 
 # ----------------------------------------------------------------------
-#  How many lights are we willing to expose?  (Hue apps expect low IDs)
+# How many lights are we willing to expose? (Hue apps expect low IDs)
 # ----------------------------------------------------------------------
 MAX_LIGHT_ID = 20          # never let an ID > 19 be created
-HARD_CODED_FILTER = ["ambi"]   # <-- the filter you asked for
+HARD_CODED_FILTER = ["ambi"]   # the filter you asked for
 
 
 class Config:
@@ -103,30 +104,31 @@ class Config:
         self._saver_task: asyncio.Task | None = None
         self._entertainment_api: EntertainmentAPI | None = None
 
-        # --------------------------------------------------------------
-        #  ── 2️⃣  LABEL FILTER (hard‑coded to ["ambi"])
-        # --------------------------------------------------------------
-        # The original upstream code tried to read an env‑var but then overwrote
-        # it with a hard‑coded list.  We keep the same “hard‑coded” behaviour
-        # but make it explicit and centralised.
+        # ------------------------------------------------------------------
+        #  1️⃣  LABEL FILTER – hard‑coded to ["ambi"]
+        # ------------------------------------------------------------------
         self._label_filter: list[str] = parse_label_filter(HARD_CODED_FILTER)
 
-        # ------------------------------------------------------------------
-        #  Persisted override – we keep this for backward compatibility.
-        #  (If a user ever manually writes a different filter into the JSON
-        #   we honour it; otherwise the hard‑coded list stays.)
-        # ------------------------------------------------------------------
+        # Allow a persisted override (kept for backward compatibility).
         persisted = self.get_storage_value("bridge_config", "label_filter", None)
         if persisted and isinstance(persisted, list):
-            self._label_filter = [str(x).strip().lower() for x in persisted if x]
+            self._label_filter = [
+                str(x).strip().lower() for x in persisted if x
+            ]
 
-        # --------------------------------------------------------------
-        #  ── 3️⃣  PRUNE / RE‑NUMBER ON STARTUP
-        # --------------------------------------------------------------
-        # This runs **once** when the Config object is created – it removes
-        # every light that does not match the filter and then renumbers the
-        # survivors so that the IDs are sequential and < MAX_LIGHT_ID.
-        self._prune_and_renumber()
+        # ------------------------------------------------------------------
+        #  3️⃣  PRUNE / RE‑NUMBER ON STARTUP (guarded)
+        # ------------------------------------------------------------------
+        # If pruning fails we do **not** want the whole integration to die,
+        # therefore we wrap it in a try/except and only log the error.
+        try:
+            self._prune_and_renumber()
+        except Exception as exc:   # pragma: no cover   (should never happen)
+            LOGGER.error(
+                "Failed to prune / renumber emulated_hue.json during init: %s",
+                exc,
+                exc_info=True,
+            )
 
     # ----------------------------------------------------------------------
     #  ── PUBLIC PROPERTIES (unchanged)
@@ -136,87 +138,80 @@ class Config:
         """Return configured label filter as list of lowercase tokens."""
         return self._label_filter
 
-    # ----------------------------------------------------------------------
-    #  ── 4️⃣  PRUNING / RE‑NUMBERING LOGIC
-    # ----------------------------------------------------------------------
-    def _prune_and_renumber(self) -> None:
-        """
-        Remove lights that do not contain any token from ``self._label_filter``
-        in their entity_id and then renumber the remaining lights so that:
+    async def create_save_task(self) -> None:
+        """Create a task to save the config."""
+        if self._saver_task is None or self._saver_task.done():
+            self._saver_task = asyncio.create_task(self._commit_config())
 
-        * IDs start at ``1`` and increase by ``1``.
-        * No ID ever exceeds ``MAX_LIGHT_ID - 1`` (i.e. 19).
+    async def _commit_config(self, immediate_commit: bool = False) -> None:
+        if not immediate_commit:
+            await asyncio.sleep(CONFIG_WRITE_DELAY_SECONDS)
+        await async_save_json(self.get_path(CONFIG_FILE), self._config)
 
-        Groups are also cleaned – any reference to a removed light is dropped;
-        groups that become empty (and are not Entertainment groups) are deleted.
-        """
-        # ---------- 1️⃣  Helper – does a light match the filter? ----------
-        def keep_light(entity_id: str) -> bool:
-            lowered = entity_id.lower()
-            return any(tok in lowered for tok in self._label_filter)
+    async def async_stop(self) -> None:
+        """Save the config on shutdown."""
+        self.stop_entertainment()
+        if self._saver_task is not None and not self._saver_task.done():
+            self._saver_task.cancel()
+            await self._commit_config(immediate_commit=True)
 
-        # ---------- 2️⃣  Prune the ``lights`` dict ----------
-        old_lights: dict = self._config.get("lights", {})
-        new_lights: dict = {}
-        next_id = 1
+    @property
+    def ip_addr(self) -> str:
+        """Return ip address of the emulated bridge."""
+        return self._ip_addr
 
-        for old_id, light_cfg in old_lights.items():
-            entity = light_cfg.get("entity_id", "")
-            if not keep_light(entity):
-                # skip / drop this light
-                continue
+    @property
+    def mac_addr(self) -> str:
+        """Return mac address of the emulated bridge."""
+        return self._mac_addr
 
-            if next_id > MAX_LIGHT_ID:
-                # safety‑net – we stop adding more lights once we hit the cap.
-                LOGGER.warning(
-                    "Reached MAX_LIGHT_ID (%d).  Light %s will be omitted.",
-                    MAX_LIGHT_ID,
-                    entity,
-                )
-                continue
+    @property
+    def bridge_id(self) -> str:
+        """Return the bridge id of the emulated bridge."""
+        return self._bridge_id
 
-            new_lights[str(next_id)] = light_cfg
-            next_id += 1
+    @property
+    def bridge_serial(self) -> str:
+        """Return the bridge serial of the emulated bridge."""
+        return self._bridge_serial
 
-        self._config["lights"] = new_lights
-        LOGGER.info(
-            "Pruned lights: %d → %d (max ID %d)",
-            len(old_lights),
-            len(new_lights),
-            MAX_LIGHT_ID - 1,
-        )
+    @property
+    def bridge_uid(self) -> str:
+        """Return the bridge UID of the emulated bridge."""
+        return self._bridge_uid
 
-        # ---------- 3️⃣  Clean up ``groups`` ----------
-        old_groups: dict = self._config.get("groups", {})
-        new_groups: dict = {}
-        kept_ids = set(new_lights.keys())
+    @property
+    def link_mode_enabled(self) -> bool:
+        """Return state of link mode."""
+        return self._link_mode_enabled
 
-        for gid, grp in old_groups.items():
-            # Remove any light IDs that no longer exist
-            grp_lights = [lid for lid in grp.get("lights", []) if lid in kept_ids]
-            grp["lights"] = grp_lights
+    @property
+    def link_mode_discovery_key(self) -> str | None:
+        """Return the temporary token which enables linking."""
+        return self._link_mode_discovery_key
 
-            # Delete the group if it is now empty **and** it is not an
-            # Entertainment group (those groups have a special purpose).
-            if not grp_lights and grp.get("type") != "Entertainment":
-                continue
+    @property
+    def bridge_name(self) -> str:
+        """Return the friendly name for the emulated bridge."""
+        return self.get_storage_value("bridge_config", "name", "Hass Emulated Hue")
 
-            new_groups[gid] = grp
+    @property
+    def definitions(self) -> dict:
+        """Return the definitions dictionary (e.g. bridge sw version)."""
+        # TODO: Periodically check for updates of the definitions file on Github ?
+        return self._definitions
 
-        self._config["groups"] = new_groups
-        LOGGER.info(
-            "Pruned groups: %d → %d (removed empty non‑entertainment groups)",
-            len(old_groups),
-            len(new_groups),
-        )
+    @property
+    def entertainment_active(self) -> bool:
+        """Return current state of entertainment mode."""
+        return self._entertainment_api is not None
 
-        # ---------- 4️⃣  Persist the cleaned config immediately ----------
-        # We write synchronously here because we are still in __init__ – the
-        # bridge will start up with a clean file.
-        async_save_json(self.get_path(CONFIG_FILE), self._config)
+    def get_path(self, filename: str) -> str:
+        """Get path to file at data location."""
+        return os.path.join(self.data_path, filename)
 
     # ----------------------------------------------------------------------
-    #  ── 5️⃣  LIGHT‑ID CREATION (filter guard + max‑ID guard)
+    #  ── 2️⃣  LIGHT‑ID CREATION (filter guard + max‑ID guard)
     # ----------------------------------------------------------------------
     async def async_entity_id_to_light_id(self, entity_id: str) -> str:
         """Get a unique light_id number for the hass entity id."""
@@ -228,7 +223,6 @@ class Config:
         # --------------------------------------------------------------
         #  FILTER GUARD – reject anything that does not contain a token
         # --------------------------------------------------------------
-        # (Hard‑coded filter ["ambi"] is stored in ``self._label_filter``)
         if self._label_filter:
             lowered = entity_id.lower()
             if not any(tok in lowered for tok in self._label_filter):
@@ -287,7 +281,145 @@ class Config:
         return next_light_id
 
     # ----------------------------------------------------------------------
-    #  ── THE REMAINDER OF THE CLASS (unchanged)
+    #  ── 4️⃣  PRUNING / RE‑NUMBERING LOGIC
+    # ----------------------------------------------------------------------
+    def _prune_and_renumber(self) -> None:
+        """
+        Remove lights that do not contain any token from ``self._label_filter``
+        in their entity_id and then renumber the remaining lights so that:
+
+        * IDs start at ``1`` and increase by ``1``.
+        * No ID ever exceeds ``MAX_LIGHT_ID - 1`` (i.e. 19).
+
+        Groups are also cleaned – any reference to a removed light is dropped;
+        groups that become empty (and are not Entertainment groups) are deleted.
+        If the pruning would leave the bridge with *no* lights, a tiny dummy
+        light + dummy room are added so the Hue bridge can still start.
+        """
+        # ---------- 1️⃣  Helper – does a light match the filter? ----------
+        def keep_light(entity_id: str) -> bool:
+            lowered = entity_id.lower()
+            return any(tok in lowered for tok in self._label_filter)
+
+        # ---------- 2️⃣  Prune the ``lights`` dict ----------
+        old_lights: dict = self._config.get("lights", {})
+        new_lights: dict = {}
+        next_id = 1
+
+        for old_id, light_cfg in old_lights.items():
+            entity = light_cfg.get("entity_id", "")
+            if not keep_light(entity):
+                # skip / drop this light
+                continue
+
+            if next_id > MAX_LIGHT_ID:
+                # safety‑net – stop adding more lights once we hit the cap.
+                LOGGER.warning(
+                    "Reached MAX_LIGHT_ID (%d). Light %s will be omitted.",
+                    MAX_LIGHT_ID,
+                    entity,
+                )
+                continue
+
+            new_lights[str(next_id)] = light_cfg
+            next_id += 1
+
+        # ---------- 3️⃣  If we removed everything, create a dummy light ----------
+        if not new_lights:
+            LOGGER.info(
+                "All lights were filtered out – creating a minimal dummy light "
+                "so the bridge can start."
+            )
+            dummy_entity = "light.dummy_ambi"
+            dummy_unique = "00:00:00:00:00:00:00:00-00"
+            dummy_cfg = {
+                "entity_id": dummy_entity,
+                "enabled": True,
+                "name": "Dummy ambi",
+                "uniqueid": dummy_unique,
+                "config": {
+                    "archetype": "sultanbulb",
+                    "function": "mixed",
+                    "direction": "omnidirectional",
+                    "startup": {"configured": True, "mode": "safety"},
+                },
+                "throttle": DEFAULT_THROTTLE_MS,
+                "state": {
+                    "brightness": 0,
+                    "color_mode": "onoff",
+                    "power_state": False,
+                    "reachable": True,
+                },
+            }
+            new_lights["1"] = dummy_cfg
+            next_id = 2   # next free ID after the dummy
+
+        self._config["lights"] = new_lights
+        LOGGER.info(
+            "Pruned lights: %d → %d (max ID %d)",
+            len(old_lights),
+            len(new_lights),
+            MAX_LIGHT_ID - 1,
+        )
+
+        # ---------- 4️⃣  Clean up ``groups`` ----------
+        old_groups: dict = self._config.get("groups", {})
+        new_groups: dict = {}
+        kept_ids = set(new_lights.keys())
+
+        for gid, grp in old_groups.items():
+            # Remove any light IDs that no longer exist
+            grp_lights = [lid for lid in grp.get("lights", []) if lid in kept_ids]
+            grp["lights"] = grp_lights
+
+            # Delete the group if it is now empty **and** it is not an
+            # Entertainment group (those groups have a special purpose).
+            if not grp_lights and grp.get("type") != "Entertainment":
+                continue
+
+            new_groups[gid] = grp
+
+        # ---------- 5️⃣  If we have no groups at all, add a dummy room ----------
+        if not new_groups:
+            LOGGER.info(
+                "No groups survived pruning – creating a minimal dummy room."
+            )
+            dummy_group = {
+                "area_id": "dummy_room",
+                "class": "Other",
+                "enabled": True,
+                "name": "Dummy Room",
+                "type": "Room",
+                "lights": list(kept_ids),   # put *all* lights in the dummy room
+                "sensors": [],
+                "action": {"on": False},
+                "state": {"any_on": False, "all_on": False},
+            }
+            new_groups["1"] = dummy_group
+
+        self._config["groups"] = new_groups
+        LOGGER.info(
+            "Pruned groups: %d → %d (removed empty non‑entertainment groups)",
+            len(old_groups),
+            len(new_groups),
+        )
+
+        # ---------- 6️⃣  Persist the cleaned config synchronously ----------
+        # We are still in ``__init__`` – there is no running event‑loop, so we
+        # must write the file the normal (blocking) way.
+        cfg_path = self.get_path(CONFIG_FILE)
+        try:
+            with open(cfg_path, "w", encoding="utf-8") as fp:
+                json.dump(self._config, fp, indent=4, sort_keys=False)
+            LOGGER.debug(
+                "Emulated‑Hue config written synchronously after pruning."
+            )
+        except OSError as err:   # pragma: no cover   (unlikely on a healthy FS)
+            # Propagate the exception so the outer guard in __init__ can log it.
+            raise
+
+    # ----------------------------------------------------------------------
+    #  ── 5️⃣  OTHER CONFIG HELPERS (unchanged)
     # ----------------------------------------------------------------------
     async def async_get_light_config(self, light_id: str) -> dict:
         """Return light config for given light id."""
