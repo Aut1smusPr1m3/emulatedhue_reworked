@@ -102,3 +102,4 @@ class EntityState(BaseModel):
 
 
 ALL_STATES: list = list(EntityState.model_fields.keys())
+
