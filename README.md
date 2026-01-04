@@ -21,9 +21,9 @@ Control all lights connected to your Home Assistant box with HUE compatible apps
 
 ## How to run/install/use this thing ?
 - Add the custom repository to the Home Assistant supervisor's add-on store: 
-  https://github.com/hass-emulated-hue/hassio-repo
+  https://github.com/Aut1smusPr1m3/Hassio_repository
 - Install the Emulated HUE addon from the addon-store
-- Start the newly installed addon and it will work instantly
+- Start the newly installed addon and it ~will~ (MIGHT) work instantly
 
 Once started, it will be available as a HUE bridge on your network.
 
