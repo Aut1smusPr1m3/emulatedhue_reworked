@@ -53,7 +53,8 @@ class EntityState(BaseModel):
     color_mode: str | None = None
 
     # -----------------------------------------------------------------
-    # NEW: validator that guarantees integer hue & saturation
+    # NEW: validator that guarantees integer hue & saturation **and**
+    # scales HA's 0‑360 / 0‑100 ranges to Hue's 0‑65535 / 0‑254 ranges.
     # -----------------------------------------------------------------
     @field_validator("hue_saturation")
     @classmethod
@@ -61,16 +62,39 @@ class EntityState(BaseModel):
         cls, v: tuple[int | float, int | float] | None
     ) -> tuple[int, int] | None:
         """
-        Home‑Assistant often reports hue/saturation as floats.
-        The Hue API expects integer values (0‑65535 for hue,
-        0‑254 for saturation).  We round them to the nearest int
-        so the rest of the code can keep using integer semantics.
+        Home‑Assistant reports hue/saturation as floats:
+          * hue  : 0‑360 ° (or 0‑65535 if the integration already scaled it)
+          * sat  : 0‑100 % (or 0‑254 if already scaled)
+
+        The Hue API expects **integers** in the ranges:
+          * hue  : 0‑65535
+          * sat  : 0‑254
+
+        This validator:
+          1. Detects whether the incoming numbers are already in the Hue range
+             (>= 360 for hue or >= 254 for sat). If they are, we simply round.
+          2. Otherwise we scale:
+                hue_int = round(hue * 65535 / 360)
+                sat_int = round(sat * 254 / 100)
         """
         if v is None:
             return v
+
         hue, sat = v
-        # ``round`` gives the most natural behaviour for .5 values.
-        return (int(round(hue)), int(round(sat)))
+
+        # If the values look already scaled for Hue, just round them.
+        if hue >= 360 or sat >= 254:
+            return (int(round(hue)), int(round(sat)))
+
+        # Normal HA ranges – scale to Hue ranges.
+        hue_int = int(round(hue * 65535 / 360))
+        sat_int = int(round(sat * 254 / 100))
+
+        # Clamp just in case Home Assistant ever returns something out of bounds.
+        hue_int = max(0, min(hue_int, 65535))
+        sat_int = max(0, min(sat_int, 254))
+
+        return (hue_int, sat_int)
 
     # -----------------------------------------------------------------
 
