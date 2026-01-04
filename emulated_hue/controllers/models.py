@@ -87,13 +87,12 @@ class EntityState(BaseModel):
             return (int(round(hue)), int(round(sat)))
 
         # Normal HA ranges – scale to Hue ranges.
-        #hue_int = int(round(hue * 65535 / 360))
-        #sat_int = int(round(sat * 254 / 100))
+        hue_int = int(round((hue * 65535) / 360))
+        sat_int = int(round((sat * 254) / 100))
 
         # Clamp just in case Home Assistant ever returns something out of bounds.
-        hue_int = max(0, min(hue_int, 360))
-        sat_int = max(0, min(sat_int, 100))
-
+        hue_int = max(0, min(hue_int, 65535))
+        sat_int = max(0, min(sat_int, 254))
         return (hue_int, sat_int)
 
     # -----------------------------------------------------------------
