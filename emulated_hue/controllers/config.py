@@ -340,12 +340,12 @@ class Config:
                 "All lights were filtered out – creating a minimal dummy light "
                 "so the bridge can start."
             )
-            dummy_entity = "light.dummy_ambi"
+            dummy_entity = "light.dummy_placeholder"   # <‑‑ renamed – does NOT contain “ambi”
             dummy_unique = "00:00:00:00:00:00:00:00-00"
             dummy_cfg = {
                 "entity_id": dummy_entity,
                 "enabled": True,
-                "name": "Dummy ambi",
+                "name": "Dummy placeholder",
                 "uniqueid": dummy_unique,
                 "config": {
                     "archetype": "sultanbulb",
@@ -390,9 +390,9 @@ class Config:
             new_groups[gid] = grp
 
         # ---------- 5️⃣  Ensure a catch‑all room contains ALL lights ----------
-        # We always create/overwrite group "1" as a dummy room that lists every
-        # light that survived pruning.  This guarantees the Hue app can see
-        # every ambi light, even if the original groups were empty.
+        # This group will always be present (ID “1”) and will list every
+        # light that survived pruning.  It guarantees the Hue app can see
+        # all ambi lights even if the original rooms are empty.
         dummy_room = {
             "area_id": "dummy_room",
             "class": "Other",
