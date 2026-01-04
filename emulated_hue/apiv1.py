@@ -175,8 +175,14 @@ class HueApiV1Endpoints:
                 if device_id
                 else {}
             )
-            if not matches_label_filter(self.ctl.config_instance.label_filter, device_attrs, hass_state):
-                LOGGER.debug("Skipping entity %s - does not match label_filter=%s", entity_id, self.ctl.config_instance.label_filter)
+            if not matches_label_filter(
+                self.ctl.config_instance.label_filter, device_attrs, hass_state
+            ):
+                LOGGER.debug(
+                    "Skipping entity %s - does not match label_filter=%s",
+                    entity_id,
+                    self.ctl.config_instance.label_filter,
+                )
                 continue
 
             light_id = await self.ctl.config_instance.async_entity_id_to_light_id(
@@ -217,9 +223,13 @@ class HueApiV1Endpoints:
         hass_state = self.ctl.controller_hass.get_entity_state(entity_id)
         device_id = self.ctl.controller_hass.get_device_id_from_entity_id(entity_id)
         device_attrs = (
-            self.ctl.controller_hass.get_device_attributes(device_id) if device_id else {}
+            self.ctl.controller_hass.get_device_attributes(device_id)
+            if device_id
+            else {}
         )
-        if not matches_label_filter(self.ctl.config_instance.label_filter, device_attrs, hass_state):
+        if not matches_label_filter(
+            self.ctl.config_instance.label_filter, device_attrs, hass_state
+        ):
             LOGGER.debug("Light %s hidden by label_filter", entity_id)
             return send_error_response(request.path, "resource, {path}, not available", 3)
 
@@ -239,9 +249,13 @@ class HueApiV1Endpoints:
         hass_state = self.ctl.controller_hass.get_entity_state(entity_id)
         device_id = self.ctl.controller_hass.get_device_id_from_entity_id(entity_id)
         device_attrs = (
-            self.ctl.controller_hass.get_device_attributes(device_id) if device_id else {}
+            self.ctl.controller_hass.get_device_attributes(device_id)
+            if device_id
+            else {}
         )
-        if not matches_label_filter(self.ctl.config_instance.label_filter, device_attrs, hass_state):
+        if not matches_label_filter(
+            self.ctl.config_instance.label_filter, device_attrs, hass_state
+        ):
             LOGGER.debug("Control blocked for %s by label_filter", entity_id)
             return send_error_response(request.path, "resource, {path}, not available", 3)
 
@@ -291,10 +305,8 @@ class HueApiV1Endpoints:
                 "scenes", request_data["scene"], default={}
             )
             for light_id, light_state in scene["lightstates"].items():
-                entity_id = (
-                    await self.ctl.config_instance.async_entity_id_from_light_id(
-                        light_id
-                    )
+                entity_id = await self.ctl.config_instance.async_entity_id_from_light_id(
+                    light_id
                 )
                 await self.__async_light_action(entity_id, light_state)
         else:
@@ -383,17 +395,27 @@ class HueApiV1Endpoints:
         if not light_conf:
             return send_error_response(request.path, "no light config", 404)
         if "name" in request_data:
-            light_conf = await self.ctl.config_instance.async_get_light_config(light_id)
+            light_conf = await self.ctl.config_instance.async_get_light_config(
+                light_id
+            )
             entity_id = light_conf["entity_id"]
             # Enforce label filter for updates
             hass_state = self.ctl.controller_hass.get_entity_state(entity_id)
-            device_id = self.ctl.controller_hass.get_device_id_from_entity_id(entity_id)
-            device_attrs = (
-                self.ctl.controller_hass.get_device_attributes(device_id) if device_id else {}
+            device_id = self.ctl.controller_hass.get_device_id_from_entity_id(
+                entity_id
             )
-            if not matches_label_filter(self.ctl.config_instance.label_filter, device_attrs, hass_state):
+            device_attrs = (
+                self.ctl.controller_hass.get_device_attributes(device_id)
+                if device_id
+                else {}
+            )
+            if not matches_label_filter(
+                self.ctl.config_instance.label_filter, device_attrs, hass_state
+            ):
                 LOGGER.debug("Update blocked for %s by label_filter", entity_id)
-                return send_error_response(request.path, "resource, {path}, not available", 3)
+                return send_error_response(
+                    request.path, "resource, {path}, not available", 3
+                )
             device = await async_get_device(self.ctl, entity_id)
             device.name = request_data["name"]
         return send_success_response(request.path, request_data, username)
@@ -677,9 +699,20 @@ class HueApiV1Endpoints:
                         sat,
                     )
                 else:
+                    # ---------------------------------------------------------
+                    # Convert Hue API values (0‑65535 / 0‑254) to Home‑Assistant
+                    # values (0‑360° / 0‑100%).  The conversion must happen **before**
+                    # we forward the data to Home‑Assistant, otherwise HA rejects it.
+                    # ---------------------------------------------------------
+                    hue_ha = (hue_val / const.HUE_ATTR_HUE_MAX) * 360.0
+                    sat_ha = (sat_val / const.HUE_ATTR_SAT_MAX) * 100.0
+
+                    # Clamp to the limits accepted by HA (just in case)
+                    hue_ha = max(0.0, min(360.0, hue_ha))
+                    sat_ha = max(0.0, min(100.0, sat_ha))
+
                     with contextlib.suppress(AttributeError):
-                        # set_hue_sat will perform the Hue→HA conversion
-                        call.set_hue_sat(hue_val, sat_val)
+                        call.set_hue_sat(hue_ha, sat_ha)
 
             if color_temp := request_data.get(const.HUE_ATTR_CT):
                 call.set_color_temperature(color_temp)
@@ -839,7 +872,9 @@ class HueApiV1Endpoints:
                 if device_id
                 else {}
             )
-            if not matches_label_filter(self.ctl.config_instance.label_filter, device_attrs, hass_state):
+            if not matches_label_filter(
+                self.ctl.config_instance.label_filter, device_attrs, hass_state
+            ):
                 continue
 
             device = await async_get_device(self.ctl, entity_id)
@@ -905,10 +940,16 @@ class HueApiV1Endpoints:
                             if device_id
                             else {}
                         )
-                        if matches_label_filter(self.ctl.config_instance.label_filter, device_attrs, hass_state):
+                        if matches_label_filter(
+                            self.ctl.config_instance.label_filter, device_attrs, hass_state
+                        ):
                             new_lights.append(light_id)
                         else:
-                            LOGGER.debug("Excluding light %s from local group %s by label_filter", entity_id, group_id)
+                            LOGGER.debug(
+                                "Excluding light %s from local group %s by label_filter",
+                                entity_id,
+                                group_id,
+                            )
                     filtered_group["lights"] = new_lights
                 # do not return empty local groups
                 if not filtered_group.get("lights"):
@@ -986,17 +1027,17 @@ class HueApiV1Endpoints:
                     if device_id
                     else {}
                 )
-                if not matches_label_filter(self.ctl.config_instance.label_filter, device_attrs, hass_state):
+                if not matches_label_filter(
+                    self.ctl.config_instance.label_filter, device_attrs, hass_state
+                ):
                     continue
                 yield entity_id
 
         # Local group
         else:
             for light_id in group_conf["lights"]:
-                entity_id = (
-                    await self.ctl.config_instance.async_entity_id_from_light_id(
-                        light_id
-                    )
+                entity_id = await self.ctl.config_instance.async_entity_id_from_light_id(
+                    light_id
                 )
                 # Apply label filter for local group members as well
                 hass_state = self.ctl.controller_hass.get_entity_state(entity_id)
@@ -1006,7 +1047,9 @@ class HueApiV1Endpoints:
                     if device_id
                     else {}
                 )
-                if not matches_label_filter(self.ctl.config_instance.label_filter, device_attrs, hass_state):
+                if not matches_label_filter(
+                    self.ctl.config_instance.label_filter, device_attrs, hass_state
+                ):
                     continue
                 yield entity_id
 
