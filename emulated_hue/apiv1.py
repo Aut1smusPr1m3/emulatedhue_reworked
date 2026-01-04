@@ -665,11 +665,8 @@ class HueApiV1Endpoints:
             sat = request_data.get(const.HUE_ATTR_SAT)
             hue = request_data.get(const.HUE_ATTR_HUE)
             if sat and hue:
-                hue = wrap_number(hue, 0, const.HUE_ATTR_HUE_MAX)
-                sat = wrap_number(sat, 0, const.HUE_ATTR_SAT_MAX)
-                # Convert hs values to hass hs values
-                hue = int((hue / const.HUE_ATTR_HUE_MAX) * 360)
-                sat = int((sat / const.HUE_ATTR_SAT_MAX) * 100)
+                # **NO conversion here – pass raw Hue values straight to set_hue_sat**
+                # set_hue_sat will handle down‑scaling to Home‑Assistant ranges.
                 with contextlib.suppress(AttributeError):
                     call.set_hue_sat(hue, sat)
 

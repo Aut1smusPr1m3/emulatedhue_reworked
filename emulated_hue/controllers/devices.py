@@ -452,11 +452,13 @@ class RGBDevice(BrightnessDevice):
             (0‑100). We therefore convert *down* before storing the
             command in the control state.
             """
-            # Down‑scale to Home‑Assistant ranges
+            # -----------------------------------------------------------------
+            # Down‑scale from Hue range → Home‑Assistant range
+            # -----------------------------------------------------------------
             hue_ha = int(round(hue * 360 / 65535))
             sat_ha = int(round(sat * 100 / 254))
 
-            # Clamp just in case
+            # Clamp just in case Home Assistant ever receives an out‑of‑range value
             hue_ha = max(0, min(hue_ha, 360))
             sat_ha = max(0, min(sat_ha, 100))
 
