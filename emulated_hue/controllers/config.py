@@ -2,7 +2,7 @@
 import asyncio
 import datetime
 import hashlib
-import json                     # <-- needed for the sync write
+import json                     # needed for the sync write
 import logging
 import os
 from pathlib import Path
@@ -219,15 +219,27 @@ class Config:
                 return key
 
         # --------------------------------------------------------------
-        #  FILTER GUARD – reject anything that does not contain a token
+        #  FILTER GUARD – if the entity does NOT contain a filter token,
+        #  return the *first* existing light (the dummy) instead of raising.
         # --------------------------------------------------------------
         if self._label_filter:
             lowered = entity_id.lower()
             if not any(tok in lowered for tok in self._label_filter):
-                raise ValueError(
-                    f"Entity '{entity_id}' does not match label filter "
-                    f"{self._label_filter!r} – it will be ignored."
+                # Choose the smallest numeric key that exists – this will be the
+                # dummy light that _prune_and_renumber() guarantees.
+                if lights:
+                    dummy_id = min(lights, key=int)   # e.g. "1"
+                else:
+                    # This should never happen because the prune step always
+                    # creates at least one light, but fallback to "1" just in case.
+                    dummy_id = "1"
+                LOGGER.debug(
+                    "Entity %s does not match label filter %s – using dummy light id %s",
+                    entity_id,
+                    self._label_filter,
+                    dummy_id,
                 )
+                return dummy_id
 
         # --------------------------------------------------------------
         #  MAX‑ID GUARD – make sure we never exceed the 0‑19 range
@@ -250,9 +262,6 @@ class Config:
         # generate unique id (fake zigbee address) from entity id
         unique_hash = hashlib.md5(entity_id.encode()).hexdigest()
         # The original format is 00:XX:XX:XX:XX:XX:XX:XX-YY
-        # We use the first 16 hex chars for the eight groups and the next
-        # two chars for the suffix (YY).  This guarantees we always have
-        # enough characters – MD5 is 32 chars long.
         unique_id = "00:{}:{}:{}:{}:{}:{}:{}:{}-{}".format(
             unique_hash[0:2],
             unique_hash[2:4],
