@@ -664,11 +664,22 @@ class HueApiV1Endpoints:
 
             sat = request_data.get(const.HUE_ATTR_SAT)
             hue = request_data.get(const.HUE_ATTR_HUE)
-            if sat and hue:
-                # **NO conversion here – pass raw Hue values straight to set_hue_sat**
-                # set_hue_sat will handle down‑scaling to Home‑Assistant ranges.
-                with contextlib.suppress(AttributeError):
-                    call.set_hue_sat(hue, sat)
+            if sat is not None and hue is not None:
+                # Validate numeric values before conversion
+                try:
+                    sat_val = float(sat)
+                    hue_val = float(hue)
+                except (TypeError, ValueError):
+                    LOGGER.warning(
+                        "Invalid hue/sat values received for %s: hue=%s sat=%s",
+                        entity_id,
+                        hue,
+                        sat,
+                    )
+                else:
+                    with contextlib.suppress(AttributeError):
+                        # set_hue_sat will perform the Hue→HA conversion
+                        call.set_hue_sat(hue_val, sat_val)
 
             if color_temp := request_data.get(const.HUE_ATTR_CT):
                 call.set_color_temperature(color_temp)

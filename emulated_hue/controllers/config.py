@@ -20,6 +20,7 @@ from emulated_hue.utils import (
     get_local_ip,
     load_json,
     parse_label_filter,
+    matches_label_filter,          # <-- NEW IMPORT
 )
 
 from .devices import force_update_all
@@ -37,6 +38,9 @@ DEFINITIONS_FILE = os.path.join(
 class Config:
     """Hold configuration variables for the emulated hue bridge."""
 
+    # ----------------------------------------------------------------------
+    #  Constructor – load, parse label filter, **prune & re‑index**
+    # ----------------------------------------------------------------------
     def __init__(
         self,
         ctl: Controller,
@@ -51,18 +55,25 @@ class Config:
         self.data_path = data_path
         if not os.path.isdir(data_path):
             os.mkdir(data_path)
+
+        # --------------------------------------------------------------
+        # Load persisted configuration and definitions (unchanged)
+        # --------------------------------------------------------------
         self._config = load_json(self.get_path(CONFIG_FILE))
         self._definitions = load_json(DEFINITIONS_FILE)
+
         self._link_mode_enabled = False
         self._link_mode_discovery_key = None
 
-        # Get the IP address that will be passed to during discovery
+        # --------------------------------------------------------------
+        # IP address handling (unchanged)
+        # --------------------------------------------------------------
         self._ip_addr = get_local_ip()
         LOGGER.info("Auto detected listen IP address is %s", self.ip_addr)
 
-        # Get the ports that the Hue bridge will listen on
-        # ports can be overridden but Hue apps expect ports 80/443
-        # so this is only useful when running a reverse proxy on the same host
+        # --------------------------------------------------------------
+        # Port handling (unchanged)
+        # --------------------------------------------------------------
         self.http_port = http_port
         self.https_port = https_port
         self.use_default_ports = use_default_ports
@@ -77,12 +88,13 @@ class Config:
                     "Are you using a reverse proxy?"
                 )
 
-        mac_addr = str(get_mac_address(ip=self.ip_addr))
+        # --------------------------------------------------------------
+        # MAC / Bridge identifiers (unchanged)
+        # --------------------------------------------------------------
+        mac_addr = str(get_mac_address(ip=self._ip_addr))
         if not mac_addr or len(mac_addr) < 16:
-            # try again without ip
             mac_addr = str(get_mac_address())
         if not mac_addr or len(mac_addr) < 16:
-            # fall back to dummy mac
             mac_addr = "b6:82:d3:45:ac:29"
         self._mac_addr = mac_addr
         mac_str = mac_addr.replace(":", "")
@@ -91,12 +103,11 @@ class Config:
         self._bridge_uid = f"2f402f80-da50-11e1-9b23-{mac_str}"
 
         self._saver_task: asyncio.Task | None = None
-
         self._entertainment_api: EntertainmentAPI | None = None
 
-        # ------------------------------------------------------------------
-        #  Parse label filter – we now *hard‑code* the whitelist to ["wz", "spot"]
-        # ------------------------------------------------------------------
+        # --------------------------------------------------------------
+        # Parse label filter – hard‑coded whitelist ["wz", "spot"]
+        # --------------------------------------------------------------
         try:
             env_filter = os.getenv(LABEL_FILTER_ENV_VAR, "")
         except Exception:
@@ -107,9 +118,16 @@ class Config:
         # allow persisted override from bridge_config if present
         persisted = self.get_storage_value("bridge_config", "label_filter", None)
         if persisted and isinstance(persisted, list):
-            # normalize persisted values
             self._label_filter = [str(x).strip().lower() for x in persisted if x]
 
+        # --------------------------------------------------------------
+        # **NEW:** Clean‑up *and* **re‑index** the persisted data
+        # --------------------------------------------------------------
+        self._prune_and_reindex()
+
+    # ----------------------------------------------------------------------
+    #  Public helpers / properties (unchanged)
+    # ----------------------------------------------------------------------
     @property
     def label_filter(self) -> list[str]:
         """Return configured label filter as list of lowercase tokens."""
@@ -183,6 +201,9 @@ class Config:
         """Return current state of entertainment mode."""
         return self._entertainment_api is not None
 
+    # ----------------------------------------------------------------------
+    #  Helper methods (unchanged)
+    # ----------------------------------------------------------------------
     def get_path(self, filename: str) -> str:
         """Get path to file at data location."""
         return os.path.join(self.data_path, filename)
@@ -443,3 +464,199 @@ class Config:
             self._entertainment_api = None
         # force update of all light states
         self.ctl.loop.create_task(force_update_all())
+
+    # ----------------------------------------------------------------------
+    #  NEW: Prune **and** re‑index the persisted data
+    # ----------------------------------------------------------------------
+    def _entity_matches_filter(self, entity_id: str) -> bool:
+        """
+        Helper that checks whether a given ``entity_id`` passes the
+        hard‑coded label filter.  If the controller or HA are not fully
+        initialised yet we fall back to ``True`` – this prevents accidental
+        removal during very early start‑up.
+        """
+        try:
+            hass_state = self.ctl.controller_hass.get_entity_state(entity_id)
+            device_id = self.ctl.controller_hass.get_device_id_from_entity_id(entity_id)
+            device_attrs = (
+                self.ctl.controller_hass.get_device_attributes(device_id)
+                if device_id
+                else {}
+            )
+            return matches_label_filter(self._label_filter, device_attrs, hass_state)
+        except Exception:  # pragma: no cover – defensive fallback
+            return True
+
+    def _prune_and_reindex(self) -> None:
+        """
+        1️⃣ **Prune** lights, groups and local items that do not match the
+           whitelist (or that are malformed).
+
+        2️⃣ **Re‑index** the numeric IDs so that after pruning we have a
+           compact, gap‑free sequence (`1, 2, 3 …`).  While re‑indexing we also
+           update every cross‑reference (group → lights, scenes → lightstates,
+           etc.) so the configuration stays internally consistent.
+
+        3️⃣ Write the cleaned configuration back to disk immediately.
+        """
+        # --------------------------------------------------------------
+        # 1️⃣ Prune lights
+        # --------------------------------------------------------------
+        lights = self._config.get("lights", {})
+        lights_to_remove = []
+        for lid, lconf in lights.items():
+            entity_id = lconf.get("entity_id")
+            if not entity_id or not self._entity_matches_filter(entity_id):
+                lights_to_remove.append(lid)
+
+        for lid in lights_to_remove:
+            LOGGER.debug("Pruning light %s (filter mismatch or malformed)", lid)
+            lights.pop(lid, None)
+
+        # --------------------------------------------------------------
+        # 2️⃣ Prune groups
+        # --------------------------------------------------------------
+        groups = self._config.get("groups", {})
+        groups_to_remove = []
+        for gid, gconf in groups.items():
+            # Local groups – have a ``lights`` list
+            if "lights" in gconf and isinstance(gconf["lights"], list):
+                new_lights = []
+                for light_id in gconf["lights"]:
+                    try:
+                        entity_id = self.ctl.config_instance.async_entity_id_from_light_id(
+                            light_id
+                        )
+                    except Exception:
+                        # Mapping missing → drop this light reference
+                        continue
+                    if self._entity_matches_filter(entity_id):
+                        new_lights.append(light_id)
+                if new_lights:
+                    gconf["lights"] = new_lights
+                else:
+                    # No matching lights left → drop the whole group
+                    groups_to_remove.append(gid)
+            # Hass‑area groups (identified by ``area_id``) are *kept*,
+            # because the bridge will later filter their members at request time.
+            # No action needed here.
+
+        for gid in groups_to_remove:
+            LOGGER.debug("Pruning group %s (empty after filter)", gid)
+            groups.pop(gid, None)
+
+        # --------------------------------------------------------------
+        # 3️⃣ Prune local items (scenes, rules, schedules, resourcelinks)
+        # --------------------------------------------------------------
+        # These structures may reference lights that have just been removed.
+        # If a reference points to a non‑existent light we drop the whole item.
+        valid_light_ids = set(self._config.get("lights", {}).keys())
+
+        for itemtype in ("scenes", "rules", "schedules", "resourcelinks"):
+            items = self._config.get(itemtype, {})
+            items_to_remove = []
+            for iid, iconf in items.items():
+                referenced_ids = set()
+                if isinstance(iconf, dict):
+                    if "lights" in iconf and isinstance(iconf["lights"], list):
+                        referenced_ids.update(iconf["lights"])
+                    if "lightstates" in iconf and isinstance(iconf["lightstates"], dict):
+                        referenced_ids.update(iconf["lightstates"].keys())
+                # If *any* referenced light still exists we keep the item.
+                # Otherwise we delete it.
+                if referenced_ids and not referenced_ids.intersection(valid_light_ids):
+                    items_to_remove.append(iid)
+
+            for iid in items_to_remove:
+                LOGGER.debug(
+                    "Pruning %s %s (no valid light references after filter)",
+                    itemtype,
+                    iid,
+                )
+                items.pop(iid, None)
+
+        # --------------------------------------------------------------
+        # 4️⃣ Re‑index **lights**
+        # --------------------------------------------------------------
+        # Build a mapping old_id → new_id (both strings) and rewrite
+        # everything that points to a light.
+        old_to_new_light: dict[str, str] = {}
+        new_lights_dict: dict[str, dict] = {}
+        for new_index, old_lid in enumerate(sorted(self._config.get("lights", {})), start=1):
+            new_lid = str(new_index)
+            old_to_new_light[old_lid] = new_lid
+            new_lights_dict[new_lid] = self._config["lights"][old_lid]
+
+        self._config["lights"] = new_lights_dict
+
+        # --------------------------------------------------------------
+        # 5️⃣ Re‑index **groups** (local groups only – area groups keep their ID)
+        # --------------------------------------------------------------
+        old_to_new_group: dict[str, str] = {}
+        new_groups_dict: dict[str, dict] = {}
+        for new_index, old_gid in enumerate(sorted(self._config.get("groups", {})), start=1):
+            # If the group is a Hass area we *preserve* the original ID
+            # because the API uses the area‑derived ID elsewhere.
+            # Area groups always have an ``area_id`` key.
+            if "area_id" in self._config["groups"][old_gid]:
+                new_gid = old_gid
+            else:
+                new_gid = str(new_index)
+                old_to_new_group[old_gid] = new_gid
+            new_groups_dict[new_gid] = self._config["groups"][old_gid]
+
+        self._config["groups"] = new_groups_dict
+
+        # --------------------------------------------------------------
+        # 6️⃣ Walk through all structures that reference lights and
+        #     replace old IDs with the new ones.
+        # --------------------------------------------------------------
+        def _replace_light_refs(container: Any) -> Any:
+            """Recursive helper – replace any light‑ID string found."""
+            if isinstance(container, dict):
+                new_dict = {}
+                for k, v in container.items():
+                    if isinstance(v, (list, dict)):
+                        new_dict[k] = _replace_light_refs(v)
+                    elif isinstance(v, str) and v in old_to_new_light:
+                        new_dict[k] = old_to_new_light[v]
+                    else:
+                        new_dict[k] = v
+                return new_dict
+            if isinstance(container, list):
+                return [_replace_light_refs(item) for item in container]
+            return container
+
+        # Update groups → lights
+        for gconf in self._config.get("groups", {}).values():
+            if "lights" in gconf and isinstance(gconf["lights"], list):
+                gconf["lights"] = [
+                    old_to_new_light.get(lid, lid) for lid in gconf["lights"]
+                ]
+
+        # Update scenes → lightstates
+        for sconf in self._config.get("scenes", {}).values():
+            if "lightstates" in sconf and isinstance(sconf["lightstates"], dict):
+                sconf["lightstates"] = {
+                    old_to_new_light.get(lid, lid): state
+                    for lid, state in sconf["lightstates"].items()
+                }
+
+        # Update rules (some rule implementations store light IDs)
+        for rconf in self._config.get("rules", {}).values():
+            rconf = _replace_light_refs(rconf)
+
+        # Update schedules (they may contain light IDs in payloads)
+        for scheconf in self._config.get("schedules", {}).values():
+            scheconf = _replace_light_refs(scheconf)
+
+        # Update resourcelinks (rarely used, but keep consistency)
+        for rlconf in self._config.get("resourcelinks", {}).values():
+            rlconf = _replace_light_refs(rlconf)
+
+        # --------------------------------------------------------------
+        # 7️⃣ Finally, write the cleaned & re‑indexed configuration back
+        # --------------------------------------------------------------
+        # Reset any pending save task and force an immediate write.
+        self._saver_task = None
+        asyncio.get_event_loop().create_task(self._commit_config(immediate_commit=True))
