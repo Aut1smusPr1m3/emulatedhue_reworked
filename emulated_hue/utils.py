@@ -44,15 +44,15 @@ def is_local(address: IPv4Address | IPv6Address) -> bool:
     return address in LOCAL_IPS or any(address in network for network in LOCAL_NETWORKS)
 
 
-# Taken from: http://stackoverflow.com/a/11735897
+# ----------------------------------------------------------------------
+#  Network helpers
+# ----------------------------------------------------------------------
 def get_local_ip() -> str:
     """Try to determine the local IP address of the machine."""
     try:
         sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-
         # Use Google Public DNS server to determine own IP
         sock.connect(("8.8.8.8", 80))
-
         return sock.getsockname()[0]  # type: ignore
     except OSError:
         try:
@@ -123,23 +123,22 @@ def _normalise_filter(label_filter: Any) -> list[str]:
 
 
 # ----------------------------------------------------------------------
-# Public API – legacy name used by ``controllers.config``.
+#  Hard‑coded filter (WZ & Spot)
 # ----------------------------------------------------------------------
 def parse_label_filter(label_filter: Any) -> list[str]:
     """
-    Return a normalised list of label‑filter tokens.
+    **Hard‑coded whitelist** used by the bridge.
 
-    ``controllers.config`` historically imported a function called
-    ``parse_label_filter``.  The implementation was renamed to the more
-    internal ``_normalise_filter`` during a previous refactor, but the
-    import statement was never updated, resulting in the ImportError you
-    are seeing now.
+    The original implementation expected the user to supply a filter in
+    ``config.yaml``.  Because that mechanism wasn’t working for you, we
+    replace it with a static list that only allows entities whose
+    searchable fields contain either “wz” or “spot”.
 
-    This thin wrapper simply forwards to ``_normalise_filter`` so that
-    existing code (and any third‑party plugins) continue to work without
-    modification.
+    The function deliberately **ignores the incoming ``label_filter``**
+    argument – it always returns the two tokens we want.
     """
-    return _normalise_filter(label_filter)
+    # Return the two tokens in lower‑case, exactly as the matching code expects.
+    return ["wz", "spot"]
 
 
 def matches_label_filter(
@@ -150,9 +149,9 @@ def matches_label_filter(
     """
     Return ``True`` if the entity should be **exposed** to the Hue bridge.
 
-    Whitelist semantics:
-      * If ``label_filter`` is empty → *all* entities pass.
-      * Otherwise the entity passes **only** when **any** token from the filter
+    Whitelist semantics (with our hard‑coded list):
+      * If the hard‑coded list is empty → *all* entities pass.
+      * Otherwise the entity passes **only** when **any** token from the list
         appears (case‑insensitive substring) in **one** of:
           • device label (`device_props.label` or `device_props["label"]`)
           • device manufacturer / model / name / unique_id
@@ -161,8 +160,8 @@ def matches_label_filter(
     Parameters
     ----------
     label_filter:
-        Whatever the user configured under ``label_filter`` in *config.yaml*.
-        The function internally normalises it via :func:`_normalise_filter`.
+        Ignored – the function uses the hard‑coded list returned by
+        :func:`parse_label_filter`.
     device_props:
         Either a dict or an object that holds the device attributes
         (manufacturer, model, name, unique_id, label …).
@@ -170,14 +169,14 @@ def matches_label_filter(
         The full state dict returned by
         ``controller_hass.get_entity_state(entity_id)``.
     """
-    # 1️⃣  Normalise the filter → list of lower‑case tokens
-    tokens = _normalise_filter(label_filter)
+    # 1️⃣ Normalise the filter → our static list of lower‑case tokens
+    tokens = parse_label_filter(label_filter)
 
-    # 2️⃣  Empty filter → expose everything
+    # 2️⃣ Empty list → expose everything (should never happen here)
     if not tokens:
         return True
 
-    # 3️⃣  Gather candidate strings we will search in
+    # 3️⃣ Gather candidate strings we will search in
     candidates: list[str] = []
 
     # Helper to fetch an attribute from either a dict or an object
@@ -202,11 +201,11 @@ def matches_label_filter(
     except Exception:  # pragma: no cover – defensive
         pass
 
-    # If we have nothing to match against → reject (nothing can satisfy the filter)
+    # If we have nothing to match against → reject
     if not candidates:
         return False
 
-    # 4️⃣  Whitelist check – at least one token must be a substring of any candidate
+    # 4️⃣ Whitelist check – at least one token must be a substring of any candidate
     for token in tokens:
         for cand in candidates:
             if token in cand:
@@ -246,9 +245,9 @@ def send_json_response(data) -> web.Response:
     )
 
 
-# TODO: figure out correct response for:
-# PUT: /api/username/lights/light_id
-# {'config': {'startup': {'mode': 'safety'}}}
+# ----------------------------------------------------------------------
+#  Response helpers
+# ----------------------------------------------------------------------
 def send_success_response(
     request_path: str, request_data: dict, username: str = None
 ) -> web.Response:
