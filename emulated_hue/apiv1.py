@@ -704,11 +704,11 @@ class HueApiV1Endpoints:
                     # values (0‑360° / 0‑100%).  The conversion must happen **before**
                     # we forward the data to Home‑Assistant, otherwise HA rejects it.
                     # ---------------------------------------------------------
-                    hue_ha = (hue_val / const.HUE_ATTR_HUE_MAX) * 360.0
+                    hue_ha = (hue_val / const.HUE_ATTR_HUE_MAX) * 359.0
                     sat_ha = (sat_val / const.HUE_ATTR_SAT_MAX) * 100.0
 
                     # Clamp to the limits accepted by HA (just in case)
-                    hue_ha = max(0.0, min(360.0, hue_ha))
+                    hue_ha = max(0.0, min(359.0, hue_ha))
                     sat_ha = max(0.0, min(100.0, sat_ha))
 
                     with contextlib.suppress(AttributeError):
