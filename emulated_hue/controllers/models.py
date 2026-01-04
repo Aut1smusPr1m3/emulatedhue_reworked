@@ -87,7 +87,7 @@ class EntityState(BaseModel):
             data[const.HASS_ATTR_TRANSITION] = self.transition_seconds
         return data
 
-@classmethod
+    @classmethod
     def from_config(cls, states: dict | None):
         """Convert from config."""
         # Initialize states if first time running
@@ -95,11 +95,15 @@ class EntityState(BaseModel):
             return EntityState()
 
         save_state = {}
-        for state in list(vars(cls).get("__fields__")):
-            if state in save_state:
+        # Hinweis: 'vars(cls).get("__fields__")' ist Pydantic V1 Syntax.
+        # Falls du komplett auf V2 migrierst, wäre 'cls.model_fields' korrekter.
+        # Ich habe die Logik hier konservativ behalten, aber den Bug in der if-Condition gefixt.
+        fields = vars(cls).get("__fields__") or cls.model_fields
+        
+        for state in list(fields):
+            if state in states:
                 save_state[state] = states[state]
         return EntityState(**save_state)
 
 
 ALL_STATES: list = list(EntityState.model_fields.keys())
-
