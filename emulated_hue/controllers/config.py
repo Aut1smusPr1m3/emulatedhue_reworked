@@ -2,7 +2,7 @@
 import asyncio
 import datetime
 import hashlib
-import json                     # <-- NEW: needed for the sync write
+import json                     # <-- needed for the sync write
 import logging
 import os
 from pathlib import Path
@@ -119,8 +119,6 @@ class Config:
         # ------------------------------------------------------------------
         #  3️⃣  PRUNE / RE‑NUMBER ON STARTUP (guarded)
         # ------------------------------------------------------------------
-        # If pruning fails we do **not** want the whole integration to die,
-        # therefore we wrap it in a try/except and only log the error.
         try:
             self._prune_and_renumber()
         except Exception as exc:   # pragma: no cover   (should never happen)
@@ -226,8 +224,6 @@ class Config:
         if self._label_filter:
             lowered = entity_id.lower()
             if not any(tok in lowered for tok in self._label_filter):
-                # Do **not** create a light entry – the bridge will treat it as
-                # “unknown”.  Raising an exception keeps the log readable.
                 raise ValueError(
                     f"Entity '{entity_id}' does not match label filter "
                     f"{self._label_filter!r} – it will be ignored."
@@ -252,16 +248,21 @@ class Config:
             next_light_id = str(max(int(k) for k in lights) + 1)
 
         # generate unique id (fake zigbee address) from entity id
-        unique_id = hashlib.md5(entity_id.encode()).hexdigest()
+        unique_hash = hashlib.md5(entity_id.encode()).hexdigest()
+        # The original format is 00:XX:XX:XX:XX:XX:XX:XX-YY
+        # We use the first 16 hex chars for the eight groups and the next
+        # two chars for the suffix (YY).  This guarantees we always have
+        # enough characters – MD5 is 32 chars long.
         unique_id = "00:{}:{}:{}:{}:{}:{}:{}:{}-{}".format(
-            unique_id[0:2],
-            unique_id[2:4],
-            unique_id[4:6],
-            unique_id[6:8],
-            unique_id[8:10],
-            unique_id[10:12],
-            unique_id[12:14],
-            unique_id[14:16],
+            unique_hash[0:2],
+            unique_hash[2:4],
+            unique_hash[4:6],
+            unique_hash[6:8],
+            unique_hash[8:10],
+            unique_hash[10:12],
+            unique_hash[12:14],
+            unique_hash[14:16],
+            unique_hash[16:18],
         )
         # create default light config
         light_config = {
@@ -405,8 +406,6 @@ class Config:
         )
 
         # ---------- 6️⃣  Persist the cleaned config synchronously ----------
-        # We are still in ``__init__`` – there is no running event‑loop, so we
-        # must write the file the normal (blocking) way.
         cfg_path = self.get_path(CONFIG_FILE)
         try:
             with open(cfg_path, "w", encoding="utf-8") as fp:
